@@ -1,13 +1,14 @@
 use crate::{
     operator::{ExecuteResult, Operator},
     parser::Expression,
-    storage::{Table, Tuple},
+    storage::{Table, Tuple, Value},
 };
 
 pub struct FilterOperator<'a> {
     source: Box<dyn Operator + 'a>,
     condition: Expression,
     table_schema: &'a Table, // 用于 evaluate 时查找列索引
+    column_index: usize,     // 预先找好的索引
 }
 
 impl<'a> FilterOperator<'a> {
@@ -16,10 +17,16 @@ impl<'a> FilterOperator<'a> {
         condition: Expression,
         table_schema: &'a Table,
     ) -> Self {
+        let idx = match &condition {
+            Expression::BinaryOp { left, .. } => {
+                table_schema.columns.iter().position(|c| c == left).unwrap()
+            }
+        };
         Self {
             source,
             condition,
             table_schema,
+            column_index: idx,
         }
     }
     pub fn evaluate_expression(
@@ -30,19 +37,20 @@ impl<'a> FilterOperator<'a> {
     ) -> Result<bool, String> {
         match expr {
             Expression::BinaryOp { left, op, right } => {
-                // 找到左侧列在原表中的索引
-                let idx = table
-                    .columns
-                    .iter()
-                    .position(|c| c == left)
-                    .ok_or(format!("Column {} not found in WHERE", left))?;
+                let left_val = &tuple.0[self.column_index];
 
-                let val_in_tuple = &tuple.0[idx];
+                // 将 SQL 中的字面量（字符串）转换为对应的 Value 类型进行比较
+                // 实际工程中，这个转换应该在 Planner 阶段完成，而不是执行阶段
+                let right_val = Value::from_str_typed(right, left_val);
 
-                if op == "=" {
-                    Ok(val_in_tuple == right)
-                } else {
-                    Err(format!("Unsupported operator: {}", op))
+                match op.as_str() {
+                    "=" => Ok(left_val == &right_val),
+                    ">" => Ok(left_val > &right_val),
+                    "<" => Ok(left_val < &right_val),
+                    ">=" => Ok(left_val >= &right_val),
+                    "<=" => Ok(left_val <= &right_val),
+                    "!=" => Ok(left_val != &right_val),
+                    _ => Err(format!("Unsupported operator: {}", op)),
                 }
             }
         }

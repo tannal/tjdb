@@ -15,8 +15,9 @@ impl<'a> Executor<'a> {
     }
 
     // 返回值使用 Box<dyn Operator + 'a> 确保迭代器在引用数据期间有效
-    pub fn build_plan(stmt: SelectStatement, db: &'a Database) -> Box<dyn Operator + 'a> {
-        let table = db.tables.get(&stmt.table).expect("Table not found");
+    pub fn build_plan(stmt: SelectStatement, db: &'a Database) -> Result<Box<dyn Operator + 'a>, String> {
+        let table = db.tables.get(&stmt.table)
+        .ok_or_else(|| format!("Table not found: {}", stmt.table))?;
 
         // 1. 创建 Scan (最底层)
         let mut plan: Box<dyn Operator + 'a> = Box::new(ScanOperator::new(&table.data));
@@ -39,7 +40,7 @@ impl<'a> Executor<'a> {
             })
             .collect();
 
-        Box::new(ProjectOperator::new(plan, col_indices))
+            Ok(Box::new(ProjectOperator::new(plan, col_indices)))
     }
 
 }

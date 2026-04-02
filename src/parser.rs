@@ -68,13 +68,12 @@ impl Parser {
             }
         }
 
-        
         // 2. 寻找 FROM
         if self.curr_token != Token::From {
             return Err(format!("Expected FROM, found {:?}", self.curr_token));
         }
         self.advance();
-        
+
         // 3. 解析表名
         let table = if let Token::Identifier(table_name) = &self.curr_token {
             let t = table_name.clone();
@@ -83,7 +82,7 @@ impl Parser {
         } else {
             return Err("Expected table name".to_string());
         };
-        
+
         // 4. 解析 WHERE (核心新增)
         let mut where_clause = None;
         if self.curr_token == Token::Where {
@@ -96,7 +95,6 @@ impl Parser {
             table,
             where_clause,
         })
-
     }
 
     // 极简版表达式解析：只能处理 <Ident> = <Number/String>
@@ -110,13 +108,23 @@ impl Parser {
             return Err("Expected column name in WHERE".to_string());
         };
 
-        // 解析运算符：目前只支持 =
-        let op = if self.curr_token == Token::Equal {
-            self.advance();
-            "=".to_string()
-        } else {
-            return Err("Expected '=' in WHERE".to_string());
-        };
+        // 解析运算符：现在支持多种比较符号
+        let op = match &self.curr_token {
+            Token::Equal => "=",
+            Token::GreaterThan => ">",
+            Token::LessThan => "<",
+            Token::GreaterThanEqual => ">=",
+            Token::LessThanEqual => "<=",
+            _ => {
+                return Err(format!(
+                    "Expected comparison operator, found {:?}",
+                    self.curr_token
+                ));
+            }
+        }
+        .to_string();
+
+        self.advance(); // 跳过运算符
 
         // 解析右侧：值 (可以是数字或标识符/字符串)
         let right = match &self.curr_token {
@@ -124,7 +132,7 @@ impl Parser {
                 let v = val.clone();
                 self.advance();
                 v
-            },
+            }
             _ => return Err("Expected value in WHERE".to_string()),
         };
 
