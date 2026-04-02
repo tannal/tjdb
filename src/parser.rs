@@ -8,6 +8,7 @@ pub enum Statement {
     Select(SelectStatement),
     Insert(InsertStatement),
     Update(UpdateStatement),
+    Delete(DeleteStatement),
 }
 
 #[derive(Debug)]
@@ -26,6 +27,12 @@ pub struct UpdateStatement {
     pub table_name: String,
     // 改为 Vec，存储多个 (列名, 新值表达式)
     pub assignments: Vec<(String, Expression)>,
+    pub where_clause: Option<Expression>,
+}
+
+#[derive(Debug)]
+pub struct DeleteStatement {
+    pub table_name: String,
     pub where_clause: Option<Expression>,
 }
 
@@ -90,8 +97,27 @@ impl Parser {
             Token::Select => Ok(Statement::Select(self.parse_select()?)),
             Token::Insert => Ok(Statement::Insert(self.parse_insert()?)),
             Token::Update => Ok(Statement::Update(self.parse_update()?)),
+            Token::Delete => Ok(Statement::Delete(self.parse_delete()?)),
             _ => Err(format!("Unsupported statement: {:?}", self.curr_token)),
         }
+    }
+
+    fn parse_delete(&mut self) -> Result<DeleteStatement, String> {
+        self.consume(Token::Delete)?;
+        self.consume(Token::From)?; // 解析 FROM
+        
+        let table_name = self.parse_identifier()?;
+
+        let mut where_clause = None;
+        if self.curr_token == Token::Where {
+            self.advance();
+            where_clause = Some(self.parse_expression()?);
+        }
+
+        Ok(DeleteStatement {
+            table_name,
+            where_clause,
+        })
     }
 
     /// 解析 UPDATE users SET age = age + 1 WHERE id = 1

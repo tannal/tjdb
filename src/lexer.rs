@@ -1,7 +1,7 @@
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     // 关键字
-    Select, From, Insert, Into, Values, Create, Table, Where,Update,Set,
+    Select, From, Insert, Into, Values, Create, Table, Where,Update,Set,Delete,
     
     // 标点与符号
     Asterisk,   // *
@@ -123,6 +123,7 @@ impl Lexer {
             "INSERT" => Token::Insert,
             "INTO"   => Token::Into,
             "UPDATE" => Token::Update,
+            "DELETE" => Token::Delete,
             "SET" => Token::Set,
             "VALUES" => Token::Values,
             "CREATE" => Token::Create,

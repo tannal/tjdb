@@ -2,7 +2,7 @@ use crate::operator::filter::{FilterOperator, PhysicalExpression};
 use crate::operator::project::ProjectOperator;
 use crate::operator::scan::ScanOperator;
 use crate::operator::Operator;
-use crate::parser::{Expression, SelectStatement, UpdateStatement};
+use crate::parser::{DeleteStatement, Expression, SelectStatement, UpdateStatement};
 use crate::storage::{DataType, Database, Table, Value};
 
 pub struct Executor;
@@ -10,6 +10,48 @@ pub struct Executor;
 impl Executor {
     pub fn new() -> Self {
         Self
+    }
+
+    pub fn execute_delete(
+        &self,
+        stmt: DeleteStatement,
+        db: &mut Database,
+    ) -> Result<usize, String> {
+        // 1. 获取表
+        let table = db
+            .tables
+            .get_mut(&stmt.table_name)
+            .ok_or_else(|| format!("Table '{}' not found", stmt.table_name))?;
+
+        // 2. 绑定 WHERE 表达式
+        let phys_where_expr = if let Some(w) = &stmt.where_clause {
+            let where_type = self.get_expression_type(w, table)?;
+            if where_type != DataType::Bool {
+                return Err("WHERE clause must evaluate to Bool".into());
+            }
+            Some(Self::bind_expression(w, table)?)
+        } else {
+            None
+        };
+
+        // 3. 执行物理删除
+        let initial_count = table.data.len();
+        
+        // retain 留下返回 true 的行。我们要删除符合条件的行，所以取反。
+        table.data.retain(|tuple| {
+            let should_delete = match &phys_where_expr {
+                Some(w) => match w.evaluate(tuple) {
+                    Ok(Value::Bool(b)) => b,
+                    _ => false, // 评估失败不删除（或根据需求报错）
+                },
+                None => true, // 没有 WHERE 子句，删除所有行（TRUNCATE 效果）
+            };
+            
+            !should_delete // 如果该删除，则 retain 返回 false
+        });
+
+        let deleted_count = initial_count - table.data.len();
+        Ok(deleted_count)
     }
 
     /// 执行 UPDATE 操作：直接修改 Database 中的数据
