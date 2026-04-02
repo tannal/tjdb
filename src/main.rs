@@ -2,16 +2,17 @@ use crate::lexer::{Lexer, Token};
 
 
 mod lexer;
+mod parser;
+
+use parser::Parser;
 
 fn main() {
-    let sql = "SELECT id, name FROM users WHERE id = 100;";
-    let mut lexer = Lexer::new(sql);
+    let sql = "SELECT id, name FROM users";
+    let lexer = Lexer::new(sql);
+    let mut parser = Parser::new(lexer);
 
-    loop {
-        let token = lexer.next_token();
-        println!("{:?}", token);
-        if token == Token::EOF {
-            break;
-        }
+    match parser.parse_statement() {
+        Ok(ast) => println!("AST: {:#?}", ast),
+        Err(e) => println!("Error: {}", e),
     }
 }
