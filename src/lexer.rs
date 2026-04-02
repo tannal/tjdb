@@ -1,7 +1,7 @@
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     // 关键字
-    Select, From, Insert, Into, Values, Create, Table, Where,
+    Select, From, Insert, Into, Values, Create, Table, Where,Update,Set,
     
     // 标点与符号
     Asterisk,   // *
@@ -33,6 +33,7 @@ pub enum Token {
 pub struct Lexer {
     input: Vec<char>,
     pos: usize,
+    peeked_token: Option<Token>,
 }
 
 impl Lexer {
@@ -40,6 +41,7 @@ impl Lexer {
         Self {
             input: input.chars().collect(),
             pos: 0,
+            peeked_token: None,
         }
     }
 
@@ -49,6 +51,10 @@ impl Lexer {
 
         if self.is_eof() {
             return Token::EOF;
+        }
+        // 如果之前 peek 过，直接取出来并清空缓存
+        if let Some(token) = self.peeked_token.take() {
+            return token;
         }
 
         let ch = self.peek().unwrap();
@@ -116,6 +122,8 @@ impl Lexer {
             "FROM"   => Token::From,
             "INSERT" => Token::Insert,
             "INTO"   => Token::Into,
+            "UPDATE" => Token::Update,
+            "SET" => Token::Set,
             "VALUES" => Token::Values,
             "CREATE" => Token::Create,
             "TABLE"  => Token::Table,
@@ -155,6 +163,18 @@ impl Lexer {
 
     fn peek(&self) -> Option<char> {
         self.input.get(self.pos).copied()
+    }
+
+    /// 查看下一个 Token 但不消耗它
+    pub fn peek_token(&mut self) -> Token {
+        if let Some(token) = &self.peeked_token {
+            return token.clone();
+        }
+
+        // 解析一个并存入缓存
+        let token = self.next_token();
+        self.peeked_token = Some(token.clone());
+        token
     }
 
     fn advance(&mut self) -> Option<char> {

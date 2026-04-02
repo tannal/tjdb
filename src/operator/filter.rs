@@ -21,6 +21,50 @@ pub enum PhysicalExpression {
         right: Box<PhysicalExpression>,
     },
 }
+
+// 建议放在 src/operator/mod.rs 或逻辑表达式定义处
+
+impl PhysicalExpression {
+    pub fn evaluate(&self, tuple: &Tuple) -> Result<Value, String> {
+        match self {
+            // 1. 常量直接返回
+            Self::Literal(v) => Ok(v.clone()),
+
+            // 2. 物理列索引：直接从 Tuple 内存中取值 (O(1))
+            Self::BoundColumn(idx) => {
+                tuple.0.get(*idx)
+                    .cloned()
+                    .ok_or_else(|| format!("Physical Index {} out of bounds", idx))
+            }
+
+            // 3. 二元运算：递归计算左、右值，然后根据操作符运算
+            Self::BinaryOp { left, op, right } => {
+                let left_val = left.evaluate(tuple)?;
+                let right_val = right.evaluate(tuple)?;
+
+                match op.as_str() {
+                    // 算术运算
+                    "+" => match (left_val, right_val) {
+                        (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l + r)),
+                        _ => Err("Type mismatch: '+' only supports Integers".into()),
+                    },
+                    "-" => match (left_val, right_val) {
+                        (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l - r)),
+                        _ => Err("Type mismatch: '-' only supports Integers".into()),
+                    },
+                    // 比较运算 (利用 Value 自动派生的 PartialOrd)
+                    "=" => Ok(Value::Bool(left_val == right_val)),
+                    ">" => Ok(Value::Bool(left_val > right_val)),
+                    "<" => Ok(Value::Bool(left_val < right_val)),
+                    ">=" => Ok(Value::Bool(left_val >= right_val)),
+                    "<=" => Ok(Value::Bool(left_val <= right_val)),
+                    _ => Err(format!("Unsupported operator in evaluation: {}", op)),
+                }
+            }
+        }
+    }
+}
+
 impl<'a> FilterOperator<'a> {
 pub fn new(
         source: Box<dyn Operator + 'a>,
