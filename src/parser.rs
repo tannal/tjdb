@@ -24,8 +24,8 @@ pub enum Expression {
 #[derive(Debug)]
 pub struct UpdateStatement {
     pub table_name: String,
-    pub column_name: String,
-    pub new_value: Expression,
+    // 改为 Vec，存储多个 (列名, 新值表达式)
+    pub assignments: Vec<(String, Expression)>,
     pub where_clause: Option<Expression>,
 }
 
@@ -66,7 +66,10 @@ impl Parser {
             self.advance();
             Ok(())
         } else {
-            Err(format!("Expected {:?}, found {:?}", expected, self.curr_token))
+            Err(format!(
+                "Expected {:?}, found {:?}",
+                expected, self.curr_token
+            ))
         }
     }
 
@@ -100,13 +103,22 @@ impl Parser {
 
         self.consume(Token::Set)?;
 
-        // 解析列名
-        let column_name = self.parse_identifier()?;
+        // 2. 解析赋值列表 (column = expr, column2 = expr2...)
+        let mut assignments = Vec::new();
+        loop {
+            let column_name = self.parse_identifier()?;
+            self.consume(Token::Equal)?;
+            let new_value = self.parse_expression()?;
 
-        self.consume(Token::Equal)?;
+            assignments.push((column_name, new_value));
 
-        // 解析新值的表达式
-        let new_value = self.parse_expression()?;
+            // 如果看到逗号，继续解析下一对；否则跳出循环
+            if self.curr_token == Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
 
         // 解析可选的 WHERE
         let mut where_clause = None;
@@ -117,8 +129,7 @@ impl Parser {
 
         Ok(UpdateStatement {
             table_name,
-            column_name,
-            new_value,
+            assignments,
             where_clause,
         })
     }
@@ -132,7 +143,7 @@ impl Parser {
         // 检查是否是 SELECT *
         if self.curr_token == Token::Asterisk {
             self.advance(); // 消耗 *
-            // columns 保持为空列表表示全选
+        // columns 保持为空列表表示全选
         } else {
             loop {
                 columns.push(self.parse_identifier()?);
@@ -174,7 +185,12 @@ impl Parser {
             match &self.curr_token {
                 Token::Number(n) => values.push(Value::Int(*n)),
                 Token::StringLiteral(s) => values.push(Value::Text(s.clone())),
-                _ => return Err(format!("Expected literal value, found {:?}", self.curr_token)),
+                _ => {
+                    return Err(format!(
+                        "Expected literal value, found {:?}",
+                        self.curr_token
+                    ));
+                }
             }
             self.advance();
             if self.curr_token == Token::Comma {
@@ -245,7 +261,10 @@ impl Parser {
                 self.advance();
                 Ok(Expression::Column(s))
             }
-            _ => Err(format!("Unexpected token in primary: {:?}", self.curr_token)),
+            _ => Err(format!(
+                "Unexpected token in primary: {:?}",
+                self.curr_token
+            )),
         }
     }
 

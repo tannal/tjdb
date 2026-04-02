@@ -23,38 +23,55 @@ impl Executor {
             .tables
             .get_mut(&stmt.table_name)
             .ok_or_else(|| format!("Table '{}' not found", stmt.table_name))?;
-
-        // 2. 校验目标列是否存在
-        let col_idx = table
-            .columns
-            .iter()
-            .position(|c| c.name == stmt.column_name)
-            .ok_or_else(|| format!("Column '{}' not found", stmt.column_name))?;
-        
-        let target_type = &table.columns[col_idx].data_type;
-
-        // 3. 语义校验：新值的类型是否匹配目标列类型
-        let val_type = self.get_expression_type(&stmt.new_value, table)?;
-        if &val_type != target_type {
-            return Err(format!(
-                "Type mismatch: cannot assign {:?} to {:?}",
-                val_type, target_type
-            ));
+    
+        // 2. 预处理所有赋值项 (存储索引、目标类型、物理表达式)
+        struct AssignmentPlan {
+            col_idx: usize,
+            phys_expr: PhysicalExpression,
         }
-
-        // 4. 绑定物理表达式
-        let phys_val_expr = Self::bind_expression(&stmt.new_value, table)?;
-        let phys_where_expr = if let Some(w) = stmt.where_clause {
-            let where_type = self.get_expression_type(&w, table)?;
+    
+        let mut assignment_plans = Vec::new();
+    
+        for (col_name, expr) in &stmt.assignments {
+            // 校验目标列是否存在
+            let col_idx = table
+                .columns
+                .iter()
+                .position(|c| &c.name == col_name)
+                .ok_or_else(|| format!("Column '{}' not found", col_name))?;
+    
+            let target_type = &table.columns[col_idx].data_type;
+    
+            // 语义校验：新值的类型是否匹配目标列类型
+            let val_type = self.get_expression_type(expr, table)?;
+            if &val_type != target_type {
+                return Err(format!(
+                    "Type mismatch for column '{}': cannot assign {:?} to {:?}",
+                    col_name, val_type, target_type
+                ));
+            }
+    
+            // 绑定物理表达式
+            let phys_expr = Self::bind_expression(expr, table)?;
+            
+            assignment_plans.push(AssignmentPlan {
+                col_idx,
+                phys_expr,
+            });
+        }
+    
+        // 3. 绑定 WHERE 子句的物理表达式
+        let phys_where_expr = if let Some(w) = &stmt.where_clause {
+            let where_type = self.get_expression_type(w, table)?;
             if where_type != DataType::Bool {
                 return Err("WHERE clause must evaluate to Bool".into());
             }
-            Some(Self::bind_expression(&w, table)?)
+            Some(Self::bind_expression(w, table)?)
         } else {
             None
         };
-
-        // 5. 迭代更新
+    
+        // 4. 迭代更新
         let mut updated_count = 0;
         for tuple in &mut table.data {
             let should_update = match &phys_where_expr {
@@ -64,14 +81,26 @@ impl Executor {
                 },
                 None => true,
             };
-
+    
             if should_update {
-                let new_val = phys_val_expr.evaluate(tuple)?;
-                tuple.0[col_idx] = new_val;
+                // 注意：为了严格遵循 SQL 语义，先计算所有新值，再统一更新
+                // 这样 SET col1 = col2, col2 = col1 才能正确交换值
+                let mut pending_updates = Vec::with_capacity(assignment_plans.len());
+                
+                for plan in &assignment_plans {
+                    let new_val = plan.phys_expr.evaluate(tuple)?;
+                    pending_updates.push((plan.col_idx, new_val));
+                }
+    
+                // 执行写入
+                for (idx, val) in pending_updates {
+                    tuple.0[idx] = val;
+                }
+                
                 updated_count += 1;
             }
         }
-
+    
         Ok(updated_count)
     }
 

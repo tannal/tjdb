@@ -1,59 +1,54 @@
-// src/main.rs
-
 mod executor;
 mod lexer;
-mod operator;
 mod parser;
 mod storage;
+mod operator;
 
 use storage::{Database, Table, ColumnDefinition, DataType, Value, Tuple};
 use executor::Executor;
 
 fn main() {
-    // 1. 初始化数据库
+    // 1. 定义表结构 (Schema)
+    // 在实际生产中，Schema 通常也存在特定的系统表里，这里我们手动定义
+    let users_schema = vec![
+        ColumnDefinition {name:"id".to_string(),data_type:DataType::Int, is_nullable: false },
+        ColumnDefinition {name:"name".to_string(),data_type:DataType::Text, is_nullable: false },
+        ColumnDefinition {name:"age".to_string(),data_type:DataType::Int, is_nullable: false },
+    ];
+
+    // 2. 初始化数据库并尝试从磁盘加载数据
     let mut db = Database::new();
-    db.tables.insert(
-        "users".to_string(),
-        Table {
-            name: "users".to_string(),
-            columns: vec![
-                ColumnDefinition { name: "id".to_string(), data_type: DataType::Int },
-                ColumnDefinition { name: "name".to_string(), data_type: DataType::Text },
-                ColumnDefinition { name: "age".to_string(), data_type: DataType::Int },
-            ],
-            data: vec![
-                Tuple(vec![Value::Int(1), Value::Text("Alice".into()), Value::Int(20)]),
-                Tuple(vec![Value::Int(2), Value::Text("Bob".into()), Value::Int(25)]),
-            ],
-        },
-    );
+    
+    println!("--- Loading Data from Disk ---");
+    match Table::load_from_csv("users", users_schema.clone()) {
+        Ok(table) => {
+            println!("Loaded users table with {} rows.", table.data.len());
+            db.tables.insert("users".to_string(), table);
+        }
+        Err(e) => {
+            println!("No existing data found or error loading: {}. Starting fresh.", e);
+            // 如果加载失败（比如第一次运行），则创建一个空表
+            db.tables.insert(
+                "users".to_string(),
+                Table {
+                    name: "users".to_string(),
+                    columns: users_schema,
+                    data: vec![],
+                },
+            );
+        }
+    }
 
     let test_cases = vec![
-        // --- 1. 初始查询 ---
-        "SELECT id, name, age FROM users",
-
-        // --- 2. 基础更新：把 Alice 的年龄改为 21 ---
-        "UPDATE users SET age = 21 WHERE name = 'Alice'",
-        "SELECT name, age FROM users WHERE name = 'Alice'",
-
-        // --- 3. 计算更新：所有人都老 10 岁 ---
-        "UPDATE users SET age = age + 10",
-        "SELECT id, name, age FROM users",
-
-        // --- 4. 复杂条件更新：给 30 岁以上的人改名 (虽然这有点怪) ---
-        "UPDATE users SET name = 'Senior' WHERE age > 30",
+        // 尝试插入数据（如果文件里已有 id=4，下次运行会再多一条）
+        "INSERT INTO users VALUES (4, 'Dave', 40)",
         "SELECT * FROM users",
-
-        // --- 5. 错误处理测试 ---
-        // 错误：类型不匹配 (把字符串赋给 Int 列)
-        "UPDATE users SET age = 'TooOld' WHERE id = 1",
-        // 错误：列不存在
-        "UPDATE users SET salary = 5000 WHERE id = 1",
-        // 错误：WHERE 条件类型不对
-        "UPDATE users SET age = 40 WHERE name + 1",
-
-        // --- 6. 最终状态确认 ---
-        "SELECT id, name, age FROM users",
+        
+        // 多列更新
+        "UPDATE users SET age = age + 1, name = 'Senior' WHERE age > 35",
+        
+        // 验证结果
+        "SELECT * FROM users",
     ];
 
     let executor = Executor::new();
@@ -62,6 +57,10 @@ fn main() {
         println!("\n--- Executing: {} ---", sql);
         run_query(&mut db, &executor, sql);
     }
+
+    // 3. 关键：退出前持久化数据
+    println!("\n--- Shutting Down: Saving to Disk ---");
+    db.shutdown(); 
 }
 
 fn run_query(db: &mut Database, executor: &Executor, sql: &str) {
@@ -86,18 +85,19 @@ fn run_query(db: &mut Database, executor: &Executor, sql: &str) {
                     }
                 }
                 parser::Statement::Insert(insert_stmt) => {
+                    // 注意：Database 需要实现 apply_insert
                     match db.apply_insert(insert_stmt) {
                         Ok(_) => println!("Successfully inserted 1 row."),
                         Err(e) => println!("Insert Error: {}", e),
                     }
                 }
                 parser::Statement::Update(update_stmt) => {
-                    // 注意：这里传入 &mut db
                     match executor.execute_update(update_stmt, db) {
                         Ok(count) => println!("Successfully updated {} rows.", count),
                         Err(e) => println!("Update Error: {}", e),
                     }
                 }
+                // 如果你实现了 Delete，在这里添加处理逻辑
             }
         }
         Err(e) => println!("Parser Error: {}", e),

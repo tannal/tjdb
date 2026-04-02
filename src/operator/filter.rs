@@ -31,11 +31,11 @@ impl PhysicalExpression {
             Self::Literal(v) => Ok(v.clone()),
 
             // 2. 物理列索引：直接从 Tuple 内存中取值 (O(1))
-            Self::BoundColumn(idx) => {
-                tuple.0.get(*idx)
-                    .cloned()
-                    .ok_or_else(|| format!("Physical Index {} out of bounds", idx))
-            }
+            Self::BoundColumn(idx) => tuple
+                .0
+                .get(*idx)
+                .cloned()
+                .ok_or_else(|| format!("Physical Index {} out of bounds", idx)),
 
             // 3. 二元运算：递归计算左、右值，然后根据操作符运算
             Self::BinaryOp { left, op, right } => {
@@ -52,6 +52,16 @@ impl PhysicalExpression {
                         (Value::Int(l), Value::Int(r)) => Ok(Value::Int(l - r)),
                         _ => Err("Type mismatch: '-' only supports Integers".into()),
                     },
+                    "*" => match (left_val, right_val) {
+                        // 👈 添加这个分支
+                        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+                        _ => Err("Operator '*' expects Int".into()),
+                    },
+                    "/" => match (left_val, right_val) {
+                        // 👈 添加这个分支
+                        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
+                        _ => Err("Operator '*' expects Int".into()),
+                    },
                     // 比较运算 (利用 Value 自动派生的 PartialOrd)
                     "=" => Ok(Value::Bool(left_val == right_val)),
                     ">" => Ok(Value::Bool(left_val > right_val)),
@@ -66,7 +76,7 @@ impl PhysicalExpression {
 }
 
 impl<'a> FilterOperator<'a> {
-pub fn new(
+    pub fn new(
         source: Box<dyn Operator + 'a>,
         condition: PhysicalExpression, // 👈 传入已经绑定好的物理表达式
         table_schema: &'a Table,
