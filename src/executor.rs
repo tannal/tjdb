@@ -4,7 +4,7 @@ use crate::operator::filter::{FilterOperator, PhysicalExpression};
 use crate::operator::project::ProjectOperator;
 use crate::operator::scan::ScanOperator;
 use crate::operator::Operator;
-use crate::parser::{AggregateFunc, DeleteStatement, Expression, SelectItem, SelectStatement, UpdateStatement};
+use crate::parser::{DeleteStatement, Expression, SelectItem, SelectStatement, UpdateStatement};
 use crate::storage::{DataType, Table, Tuple, Value};
 
 pub struct Executor;
@@ -39,36 +39,32 @@ impl Executor {
         // 3. 执行物理删除
         let initial_count = table.data.len();
         
-        // retain 留下返回 true 的行。我们要删除符合条件的行，所以取反。
         table.data.retain(|tuple| {
             let should_delete = match &phys_where_expr {
                 Some(w) => match w.evaluate(tuple) {
                     Ok(Value::Bool(b)) => b,
-                    _ => false, // 评估失败不删除（或根据需求报错）
+                    _ => false, 
                 },
-                None => true, // 没有 WHERE 子句，删除所有行（TRUNCATE 效果）
+                None => true, 
             };
             
-            !should_delete // 如果该删除，则 retain 返回 false
+            !should_delete 
         });
 
         let deleted_count = initial_count - table.data.len();
         Ok(deleted_count)
     }
 
-    /// 执行 UPDATE 操作：直接修改 Database 中的数据
     pub fn execute_update(
         &self,
         stmt: UpdateStatement,
         db: &mut Database,
     ) -> Result<usize, String> {
-        // 1. 获取表的可变引用
         let table = db
             .tables
             .get_mut(&stmt.table_name)
             .ok_or_else(|| format!("Table '{}' not found", stmt.table_name))?;
     
-        // 2. 预处理所有赋值项 (存储索引、目标类型、物理表达式)
         struct AssignmentPlan {
             col_idx: usize,
             phys_expr: PhysicalExpression,
@@ -77,7 +73,6 @@ impl Executor {
         let mut assignment_plans = Vec::new();
     
         for (col_name, expr) in &stmt.assignments {
-            // 校验目标列是否存在
             let col_idx = table
                 .columns
                 .iter()
@@ -85,8 +80,6 @@ impl Executor {
                 .ok_or_else(|| format!("Column '{}' not found", col_name))?;
     
             let target_type = &table.columns[col_idx].data_type;
-    
-            // 语义校验：新值的类型是否匹配目标列类型
             let val_type = self.get_expression_type(expr, table)?;
             if &val_type != target_type {
                 return Err(format!(
@@ -95,16 +88,13 @@ impl Executor {
                 ));
             }
     
-            // 绑定物理表达式
             let phys_expr = Self::bind_expression(expr, table)?;
-            
             assignment_plans.push(AssignmentPlan {
                 col_idx,
                 phys_expr,
             });
         }
     
-        // 3. 绑定 WHERE 子句的物理表达式
         let phys_where_expr = if let Some(w) = &stmt.where_clause {
             let where_type = self.get_expression_type(w, table)?;
             if where_type != DataType::Bool {
@@ -115,7 +105,6 @@ impl Executor {
             None
         };
     
-        // 4. 迭代更新
         let mut updated_count = 0;
         for tuple in &mut table.data {
             let should_update = match &phys_where_expr {
@@ -127,20 +116,15 @@ impl Executor {
             };
     
             if should_update {
-                // 注意：为了严格遵循 SQL 语义，先计算所有新值，再统一更新
-                // 这样 SET col1 = col2, col2 = col1 才能正确交换值
                 let mut pending_updates = Vec::with_capacity(assignment_plans.len());
-                
                 for plan in &assignment_plans {
                     let new_val = plan.phys_expr.evaluate(tuple)?;
                     pending_updates.push((plan.col_idx, new_val));
                 }
     
-                // 执行写入
                 for (idx, val) in pending_updates {
                     tuple.0[idx] = val;
                 }
-                
                 updated_count += 1;
             }
         }
@@ -148,8 +132,6 @@ impl Executor {
         Ok(updated_count)
     }
 
-    /// 构建查询计划：返回一个物理算子树
-    /// 注意：这里的 'a 生命周期绑定在输入的 db 上
     pub fn build_plan<'a>(
         &self,
         stmt: SelectStatement,
@@ -160,66 +142,61 @@ impl Executor {
             .get(&stmt.table_name)
             .ok_or_else(|| format!("Table not found: {}", stmt.table_name))?;
     
-        // 1. 基础算子：Scan (扫描全表)
+        // 1. 基础算子：Scan
         let mut plan: Box<dyn Operator + 'a> = Box::new(ScanOperator::new(&table.data));
     
-        // 2. 过滤算子：Filter (如果有 WHERE 子句)
+        // 2. 过滤算子：Filter
         if let Some(cond) = stmt.where_clause {
             let return_type = self.get_expression_type(&cond, table)?;
             if return_type != DataType::Bool {
-                return Err(format!(
-                    "WHERE clause must evaluate to Bool, but found {:?}",
-                    return_type
-                ));
+                return Err(format!("WHERE clause must evaluate to Bool, but found {:?}", return_type));
             }
     
             let physical_cond = Self::bind_expression(&cond, table)?;
-            // 注意：FilterOperator 会包装 ScanOperator
             plan = Box::new(FilterOperator::new(plan, physical_cond, table));
         }
     
-        // 3. 判断是否包含聚合函数
-        let has_aggregate = stmt.select_items.iter().any(|item| match item {
-            SelectItem::Aggregate(_) => true,
-            _ => false,
-        });
+        // 3. 判断聚合
+        let has_aggregate = stmt.select_items.iter().any(|item| matches!(item, SelectItem::Aggregate(_)));
     
         if has_aggregate {
-            // --- 聚合逻辑 ---
-            // 校验：目前不支持聚合函数与普通列混合查询（如 SELECT name, COUNT(*)）
             for item in &stmt.select_items {
                 if let SelectItem::Column(_) | SelectItem::Wildcard = item {
                     return Err("Mixing aggregate and non-aggregate columns is not supported without GROUP BY".into());
                 }
             }
-    
-            // 构建聚合算子 (需实现 AggregateOperator)
-            // 它会接收 plan，在执行时“抽干”底层算子的数据进行累加
             Ok(Box::new(AggregateOperator::new(plan, stmt.select_items, table)?))
         } else {
-            // --- 普通投影逻辑 ---
-            let col_indices: Vec<usize> = if stmt.select_items.is_empty() {
-                (0..table.columns.len()).collect()
-            } else {
-                stmt.select_items
-                    .iter()
-                    .map(|item| match item {
-                        SelectItem::Column(name) => table
-                            .columns
-                            .iter()
-                            .position(|c| &c.name == name)
-                            .ok_or_else(|| format!("Column '{}' not found", name)),
-                        SelectItem::Wildcard => Err("Wildcard implementation in Projection needs handling".into()), // 简化处理
-                        _ => unreachable!(),
-                    })
-                    .collect::<Result<Vec<_>, String>>()?
-            };
+            // --- 修改后的投影逻辑：处理 Wildcard ---
+            let mut col_indices = Vec::new();
+            
+            // 如果 select_items 为空（SELECT * 的另一种表现形式）或包含 Wildcard
+            for item in &stmt.select_items {
+                match item {
+                    SelectItem::Column(name) => {
+                        let idx = table.columns.iter().position(|c| &c.name == name)
+                            .ok_or_else(|| format!("Column '{}' not found", name))?;
+                        col_indices.push(idx);
+                    }
+                    SelectItem::Wildcard => {
+                        // 展开所有列索引
+                        for i in 0..table.columns.len() {
+                            col_indices.push(i);
+                        }
+                    }
+                    SelectItem::Aggregate(_) => unreachable!(),
+                }
+            }
+
+            // 如果 SQL 语句完全没有投影项（例如解析器层面的特殊情况），默认选全部
+            if col_indices.is_empty() && stmt.select_items.is_empty() {
+                col_indices = (0..table.columns.len()).collect();
+            }
     
             Ok(Box::new(ProjectOperator::new(plan, col_indices)))
         }
     }
 
-    /// 将逻辑表达式转换为基于索引的物理表达式
     fn bind_expression(expr: &Expression, table: &Table) -> Result<PhysicalExpression, String> {
         match expr {
             Expression::Literal(v) => Ok(PhysicalExpression::Literal(v.clone())),
@@ -245,7 +222,6 @@ impl Executor {
         }
     }
 
-    /// 递归检查表达式的类型安全性
     fn get_expression_type(&self, expr: &Expression, table: &Table) -> Result<DataType, String> {
         match expr {
             Expression::Literal(v) => match v {
@@ -267,19 +243,13 @@ impl Executor {
                 match op.as_str() {
                     "+" | "-" | "*" | "/" => {
                         if lt != DataType::Int || rt != DataType::Int {
-                            return Err(format!(
-                                "Operator '{}' expects Int, found {:?} and {:?}",
-                                op, lt, rt
-                            ));
+                            return Err(format!("Operator '{}' expects Int, found {:?} and {:?}", op, lt, rt));
                         }
                         Ok(DataType::Int)
                     }
                     "=" | "!=" | ">" | "<" | ">=" | "<=" => {
                         if lt != rt {
-                            return Err(format!(
-                                "Type mismatch: cannot compare {:?} with {:?}",
-                                lt, rt
-                            ));
+                            return Err(format!("Type mismatch: cannot compare {:?} with {:?}", lt, rt));
                         }
                         Ok(DataType::Bool)
                     }

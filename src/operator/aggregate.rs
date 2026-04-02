@@ -128,7 +128,7 @@ mod tests {
 
     // 辅助函数：创建一个包含测试数据的内存表
     fn setup_aggregate_db() -> Database {
-        let mut db = Database::new();
+        let mut db = Database::new("./wal.log".into());
         let schema = vec![
             ColumnDefinition { name: "id".to_string(), data_type: DataType::Int, is_nullable: false },
             ColumnDefinition { name: "age".to_string(), data_type: DataType::Int, is_nullable: false },

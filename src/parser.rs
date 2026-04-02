@@ -1,5 +1,5 @@
 use crate::lexer::{Lexer, Token};
-use crate::storage::Value;
+use crate::storage::{ColumnDefinition, DataType, Value};
 
 // --- AST 定义 ---
 
@@ -9,6 +9,11 @@ pub enum Statement {
     Insert(InsertStatement),
     Update(UpdateStatement),
     Delete(DeleteStatement),
+    // --- 事务控制语句 ---
+    Begin,
+    Commit,
+    Rollback,
+    CreateTable(CreateTableStatement),
 }
 
 #[derive(Debug)]
@@ -39,6 +44,12 @@ pub struct DeleteStatement {
 pub struct InsertStatement {
     pub table_name: String,
     pub values: Vec<Value>,
+}
+
+#[derive(Debug)]
+pub struct CreateTableStatement {
+    pub table_name: String,
+    pub columns: Vec<ColumnDefinition>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,13 +123,12 @@ impl Parser {
                 let name = name.clone();
                 self.advance();
 
-                // 检查是否是函数调用: FUNC(...)
                 if self.curr_token == Token::LeftParen {
-                    self.advance(); // 消耗左括号 '('
+                    self.advance();
                     
                     let item = match name.to_uppercase().as_str() {
                         "COUNT" => {
-                            self.consume(Token::Asterisk)?; // 目前仅支持 COUNT(*)
+                            self.consume(Token::Asterisk)?;
                             SelectItem::Aggregate(AggregateFunc::CountWildcard)
                         }
                         "SUM" => {
@@ -126,7 +136,6 @@ impl Parser {
                             SelectItem::Aggregate(AggregateFunc::Sum(col))
                         }
                         "MIN" => {
-                            // 注意：此处不再重复 consume(Token::LeftParen)，因为上面已经 advance 过了
                             let col = self.parse_identifier()?;
                             SelectItem::Aggregate(AggregateFunc::Min(col))
                         }
@@ -137,7 +146,7 @@ impl Parser {
                         _ => return Err(format!("Unknown function: {}", name)),
                     };
                     
-                    self.consume(Token::RightParen)?; // 消耗右括号 ')'
+                    self.consume(Token::RightParen)?;
                     Ok(item)
                 } else {
                     Ok(SelectItem::Column(name))
@@ -147,12 +156,67 @@ impl Parser {
         }
     }
 
+    fn parse_create_table(&mut self) -> Result<CreateTableStatement, String> {
+        self.consume(Token::Create)?;
+        self.consume(Token::Table)?;
+        let table_name = self.parse_identifier()?;
+        self.consume(Token::LeftParen)?;
+
+        let mut columns = Vec::new();
+        loop {
+            let col_name = self.parse_identifier()?;
+            let data_type = match self.parse_identifier()?.to_uppercase().as_str() {
+                "INT" | "INTEGER" => DataType::Int,
+                "TEXT" | "VARCHAR" => DataType::Text,
+                _ => return Err("Unsupported data type".into()),
+            };
+            
+            columns.push(ColumnDefinition {
+                name: col_name,
+                data_type,
+                is_nullable: true, // 简化版默认允许 null
+            });
+
+            if self.curr_token == Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        self.consume(Token::RightParen)?;
+        Ok(CreateTableStatement { table_name, columns })
+    }
+
     pub fn parse_statement(&mut self) -> Result<Statement, String> {
         match self.curr_token {
             Token::Select => Ok(Statement::Select(self.parse_select()?)),
             Token::Insert => Ok(Statement::Insert(self.parse_insert()?)),
             Token::Update => Ok(Statement::Update(self.parse_update()?)),
             Token::Delete => Ok(Statement::Delete(self.parse_delete()?)),
+
+            // 建表语句
+            Token::Create => Ok(Statement::CreateTable(self.parse_create_table()?)),
+
+            // 处理事务关键字
+            Token::Begin => {
+                self.advance();
+                // 允许 BEGIN TRANSACTION 或 简写 BEGIN
+                if let Token::Identifier(s) = &self.curr_token {
+                    if s.to_uppercase() == "TRANSACTION" {
+                        self.advance();
+                    }
+                }
+                Ok(Statement::Begin)
+            }
+            Token::Commit => {
+                self.advance();
+                Ok(Statement::Commit)
+            }
+            Token::Rollback => {
+                self.advance();
+                Ok(Statement::Rollback)
+            }
             _ => Err(format!("Unsupported statement: {:?}", self.curr_token)),
         }
     }
