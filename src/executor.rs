@@ -1,10 +1,11 @@
+use crate::database::Database;
 use crate::operator::aggregate::AggregateOperator;
 use crate::operator::filter::{FilterOperator, PhysicalExpression};
 use crate::operator::project::ProjectOperator;
 use crate::operator::scan::ScanOperator;
 use crate::operator::Operator;
 use crate::parser::{AggregateFunc, DeleteStatement, Expression, SelectItem, SelectStatement, UpdateStatement};
-use crate::storage::{DataType, Database, Table, Tuple, Value};
+use crate::storage::{DataType, Table, Tuple, Value};
 
 pub struct Executor;
 

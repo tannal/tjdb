@@ -120,8 +120,9 @@ impl<'a> Operator for AggregateOperator<'a> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::Database;
     use crate::lexer;
-    use crate::storage::{Database, Table, ColumnDefinition, DataType, Value, Tuple};
+    use crate::storage::{Table, ColumnDefinition, DataType, Value, Tuple};
     use crate::executor::Executor;
     use crate::parser::{self, AggregateFunc, SelectItem};
 

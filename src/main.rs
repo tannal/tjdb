@@ -3,10 +3,13 @@ mod lexer;
 mod parser;
 mod storage;
 mod operator;
+mod database;
 
-use storage::{Database, Table, ColumnDefinition, DataType, Value, Tuple};
+use storage::{Table, ColumnDefinition, DataType, Value, Tuple};
 use executor::Executor;
 use std::io::{self, Write};
+
+use crate::database::Database;
 
 fn main() {
     // 1. 初始化 Schema
@@ -119,7 +122,7 @@ fn run_query(db: &mut Database, executor: &Executor, sql: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{Database, Table, ColumnDefinition, DataType, Value, Tuple};
+    use crate::storage::{Table, ColumnDefinition, DataType, Value, Tuple};
     use crate::executor::Executor;
 
     // 辅助函数：快速创建一个带有初始数据的测试数据库

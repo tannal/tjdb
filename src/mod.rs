@@ -3,3 +3,4 @@ pub mod parser;
 pub mod storage;
 pub mod executor;
 pub mod operator;
+pub mod database;
