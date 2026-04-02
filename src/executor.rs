@@ -5,7 +5,7 @@ use crate::operator::project::ProjectOperator;
 use crate::operator::scan::ScanOperator;
 use crate::operator::Operator;
 use crate::parser::{DeleteStatement, Expression, SelectItem, SelectStatement, UpdateStatement};
-use crate::storage::{DataType, Table, Tuple, Value};
+use crate::storage::{DataType, Table, Value};
 
 pub struct Executor;
 

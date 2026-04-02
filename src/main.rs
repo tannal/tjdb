@@ -53,7 +53,6 @@ fn main() {
         // 系统调试指令
         match sql_lower.as_str() {
             "dump" => {
-                println!("--- WAL LOG DUMP ---");
                 let _ = db.wal.dump_log();
                 continue;
             }

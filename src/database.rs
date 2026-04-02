@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::checkpoint::Checkpoint;
 use crate::parser::{CreateTableStatement, InsertStatement};
-use crate::storage::{Table, Tuple, Value};
+use crate::storage::{Table, Tuple};
 use crate::wal::{WalManager, WalOp};
 
 pub struct Database {

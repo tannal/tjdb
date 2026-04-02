@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     fs::{self, File},
     io::{BufRead, BufReader, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
