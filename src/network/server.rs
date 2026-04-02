@@ -1,33 +1,30 @@
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use crate::database::Database;
 use crate::executor::Executor;
 use crate::parser::{Parser, Statement};
 use crate::lexer::Lexer;
 
 pub struct TredisServer {
-    db: Arc<Mutex<Database>>,
+    db: Arc<RwLock<Database>>,
 }
 
 impl TredisServer {
-    /// 创建一个新的服务器实例
     pub fn new(db: Database) -> Self {
         Self {
-            db: Arc::new(Mutex::new(db)),
+            db: Arc::new(RwLock::new(db)),
         }
     }
 
-    /// 启动异步服务器循环
     pub async fn run(&self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
         let listener = TcpListener::bind(addr).await?;
-        println!("[tjdb] Server protocol initialized. Listening on {}", addr);
+        println!("[tjdb] RwLock Server initialized. Listening on {}", addr);
 
         loop {
             let (socket, _) = listener.accept().await?;
             let db_clone = Arc::clone(&self.db);
             
-            // 为每个 TCP 连接开启一个 Tokio Task (类似于轻量级线程)
             tokio::spawn(async move {
                 if let Err(e) = handle_client(socket, db_clone).await {
                     eprintln!("[tjdb] Client session error: {}", e);
@@ -37,122 +34,117 @@ impl TredisServer {
     }
 }
 
-/// 处理单个客户端连接的会话
-async fn handle_client(mut socket: TcpStream, db: Arc<Mutex<Database>>) -> tokio::io::Result<()> {
+async fn handle_client(mut socket: TcpStream, db: Arc<RwLock<Database>>) -> tokio::io::Result<()> {
     let (reader, mut writer) = socket.split();
     let mut lines = BufReader::new(reader).lines();
-    
-    // 每个会话创建一个 Executor (如果 Executor 是无状态的)
     let executor = Executor::new();
     
-    writer.write_all(b"Welcome to tjdb Server v0.1\nType 'EXIT' to disconnect.\n").await?;
+    writer.write_all(b"Welcome to tjdb Server (Concurrent Mode) v0.1\n> ").await?;
 
     while let Some(line) = lines.next_line().await? {
         let sql = line.trim();
         if sql.is_empty() { continue; }
-        if sql.to_lowercase() == "exit" || sql.to_lowercase() == "quit" {
-            writer.write_all(b"Goodbye!\n").await?;
-            break;
-        }
+        if sql.to_lowercase() == "exit" { break; }
 
-        // --- 核心执行逻辑锁定区 ---
-        // 我们在代码块内获取锁，确保执行完立即释放，不阻塞其他客户端
-        let response = {
-            let mut db_guard = db.lock().unwrap();
-            process_query(&mut db_guard, &executor, sql)
+        // 1. 预解析：判断是读操作还是写操作，以决定申请哪种锁
+        let is_readonly = is_readonly_query(sql);
+
+        // 2. 根据查询类型获取相应的锁
+        let response = if is_readonly {
+            // 读锁：允许多个客户端同时进入此代码块执行 SELECT
+            let db_guard = db.read().unwrap();
+            process_query_internal(&db_guard, &executor, sql)
+        } else {
+            // 写锁：排他性，确保数据修改时没有其他读写操作
+            let mut db_guard = db.write().unwrap();
+            process_query_mut_internal(&mut db_guard, &executor, sql)
         };
 
-        // 发送结果和 Prompt
         writer.write_all(response.as_bytes()).await?;
-        
-        // 根据事务状态动态显示 Prompt
+
+        // 3. 动态 Prompt
         let prompt = {
-            let db_guard = db.lock().unwrap();
+            let db_guard = db.read().unwrap();
             if db_guard.in_transaction { "\ntjdb (tx)> " } else { "\ntjdb> " }
         };
         writer.write_all(prompt.as_bytes()).await?;
     }
-    
     Ok(())
 }
 
-/// 将原来的 run_query 逻辑适配为返回 String，方便网络传输
-fn process_query(db: &mut Database, executor: &Executor, sql: &str) -> String {
+/// 辅助函数：快速判断是否为只读查询
+fn is_readonly_query(sql: &str) -> bool {
+    let sql_lower = sql.to_lowercase();
+    // 只有 SELECT 且不在事务中，或者特定的系统查询可以认为是只读
+    // 注意：如果处于事务中，为了简化状态管理，建议一律使用写锁
+    sql_lower.starts_with("select") && !sql_lower.contains("into")
+}
+
+/// 针对只读操作的处理（使用不可变引用）
+fn process_query_internal(db: &Database, executor: &Executor, sql: &str) -> String {
+    let lexer = Lexer::new(sql);
+    let mut parser = Parser::new(lexer);
+    match parser.parse_statement() {
+        Ok(Statement::Select(select_stmt)) => {
+            match executor.build_plan(select_stmt, db) {
+                Ok(plan) => {
+                    let mut out = String::from("Query Results:\n");
+                    for result in plan {
+                        match result {
+                            Ok(tuple) => out.push_str(&format!("  {:?}\n", tuple.0)),
+                            Err(e) => out.push_str(&format!("  Error: {}\n", e)),
+                        }
+                    }
+                    out
+                }
+                Err(e) => format!("Plan Error: {}", e),
+            }
+        }
+        _ => "This operation requires a write lock (or invalid read syntax).".to_string(),
+    }
+}
+
+/// 针对修改操作的处理（使用可变引用）
+fn process_query_mut_internal(db: &mut Database, executor: &Executor, sql: &str) -> String {
     let lexer = Lexer::new(sql);
     let mut parser = Parser::new(lexer);
     let mut output = String::new();
 
     match parser.parse_statement() {
         Ok(stmt) => match stmt {
-            // --- DDL ---
-            Statement::CreateTable(create_stmt) => {
-                match db.apply_create_table(create_stmt) {
-                    Ok(_) => output.push_str("Table created successfully."),
-                    Err(e) => output.push_str(&format!("Create Table Error: {}", e)),
-                }
-            }
-
-            // --- 事务控制 ---
-            Statement::Begin => {
-                match db.begin_transaction() {
-                    Ok(tid) => output.push_str(&format!("Transaction {} started.", tid)),
-                    Err(e) => output.push_str(&format!("Begin Error: {}", e)),
-                }
-            }
-            Statement::Commit => {
-                match db.commit_transaction() {
-                    Ok(_) => output.push_str("Transaction committed."),
-                    Err(e) => output.push_str(&format!("Commit Error: {}", e)),
-                }
-            }
+            Statement::CreateTable(cs) => match db.apply_create_table(cs) {
+                Ok(_) => "Table created.".to_string(),
+                Err(e) => format!("Error: {}", e),
+            },
+            Statement::Begin => match db.begin_transaction() {
+                Ok(tid) => format!("Transaction {} started.", tid),
+                Err(e) => format!("Error: {}", e),
+            },
+            Statement::Commit => match db.commit_transaction() {
+                Ok(_) => "Committed.".to_string(),
+                Err(e) => format!("Error: {}", e),
+            },
             Statement::Rollback => {
                 db.in_transaction = false;
-                db.current_txn_id = None;
                 db.active_transactions.clear();
-                output.push_str("Transaction rolled back.");
+                "Rolled back.".to_string()
             }
-
-            // --- DML ---
-            Statement::Select(select_stmt) => {
-                match executor.build_plan(select_stmt, db) {
-                    Ok(plan) => {
-                        output.push_str("Query Results:\n");
-                        for result in plan {
-                            match result {
-                                Ok(tuple) => output.push_str(&format!("  {:?}\n", tuple.0)),
-                                Err(e) => output.push_str(&format!("  Execution Error: {}\n", e)),
-                            }
-                        }
-                    }
-                    Err(e) => output.push_str(&format!("Plan Error: {}", e)),
-                }
-            }
-            Statement::Insert(insert_stmt) => {
-                match db.apply_insert(insert_stmt) {
-                    Ok(_) => {
-                        if db.in_transaction {
-                            output.push_str("1 row staged in transaction.");
-                        } else {
-                            output.push_str("1 row inserted (autocommit).");
-                        }
-                    }
-                    Err(e) => output.push_str(&format!("Insert Error: {}", e)),
-                }
-            }
-            Statement::Update(update_stmt) => {
-                match executor.execute_update(update_stmt, db) {
-                    Ok(count) => output.push_str(&format!("Successfully updated {} rows.", count)),
-                    Err(e) => output.push_str(&format!("Update Error: {}", e)),
-                }
-            }
-            Statement::Delete(delete_stmt) => {
-                match executor.execute_delete(delete_stmt, db) {
-                    Ok(count) => output.push_str(&format!("Successfully deleted {} rows.", count)),
-                    Err(e) => output.push_str(&format!("Delete Error: {}", e)),
-                }
-            }
+            Statement::Insert(is) => match db.apply_insert(is) {
+                Ok(_) => "Inserted.".to_string(),
+                Err(e) => format!("Error: {}", e),
+            },
+            Statement::Update(us) => match executor.execute_update(us, db) {
+                Ok(n) => format!("Updated {} rows.", n),
+                Err(e) => format!("Error: {}", e),
+            },
+            Statement::Delete(ds) => match executor.execute_delete(ds, db) {
+                Ok(n) => format!("Deleted {} rows.", n),
+                Err(e) => format!("Error: {}", e),
+            },
+            // 如果在写锁里跑了 SELECT，也兼容处理
+            Statement::Select(ss) => process_query_internal(db, executor, sql),
+            _ => "Unsupported statement.".to_string(),
         },
-        Err(e) => output.push_str(&format!("Parser Error: {}", e)),
+        Err(e) => format!("Parser Error: {}", e),
     }
-    output
 }
