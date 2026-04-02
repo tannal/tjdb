@@ -25,10 +25,16 @@ The engine is divided into several modular components:
 Ensure you have [Rust](https://www.rust-lang.org/tools/install) installed.
 
 ```bash
-git clone [https://github.com/tannal/tjdb.git](https://github.com/tannal/tjdb.git)
+git clone https://github.com/tannal/tjdb.git
 cd tjdb
 cargo build
 ```
+
+## TODO
+
+- Join operator
+- MVCC
+- testing infrastructure
 
 ## WAL
 

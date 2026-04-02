@@ -6,11 +6,11 @@ use crate::executor::Executor;
 use crate::parser::{Parser, Statement};
 use crate::lexer::Lexer;
 
-pub struct TredisServer {
+pub struct TServer {
     db: Arc<RwLock<Database>>,
 }
 
-impl TredisServer {
+impl TServer {
     pub fn new(db: Database) -> Self {
         Self {
             db: Arc::new(RwLock::new(db)),
