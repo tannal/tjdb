@@ -1,32 +1,22 @@
-pub struct Lexer {
-    input: Vec<char>,
-    pos: usize,
-}
-
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     // 关键字
-    Select,
-    From,
-    Insert,
-    Into,
-    Values,
-    Create,
-    Table,
-
-    Where,
-
+    Select, From, Insert, Into, Values, Create, Table, Where,
+    
     // 标点与符号
     Asterisk,   // *
     Comma,      // ,
     Semicolon,  // ;
     LeftParen,  // (
     RightParen, // )
-    Equal,      // =
-    GreaterThan,
-    GreaterThanEqual,
-    LessThan,
-    LessThanEqual,
+    
+    // 运算符 (支持单/双字符)
+    Equal,            // =
+    NotEqual,         // !=
+    GreaterThan,      // >
+    GreaterThanEqual, // >=
+    LessThan,         // <
+    LessThanEqual,    // <=
 
     // 字面量与标识符
     Identifier(String),
@@ -34,6 +24,11 @@ pub enum Token {
     StringLiteral(String),
 
     EOF,
+}
+
+pub struct Lexer {
+    input: Vec<char>,
+    pos: usize,
 }
 
 impl Lexer {
@@ -44,92 +39,135 @@ impl Lexer {
         }
     }
 
-    // 辅助函数：跳过空格
-    fn skip_whitespace(&mut self) {
-        while self.pos < self.input.len() && self.input[self.pos].is_whitespace() {
-            self.pos += 1;
-        }
-    }
-
-    // 核心函数：获取下一个 Token
+    // --- 核心入口 ---
     pub fn next_token(&mut self) -> Token {
         self.skip_whitespace();
 
-        if self.pos >= self.input.len() {
+        if self.is_eof() {
             return Token::EOF;
         }
 
-        let ch = self.input[self.pos];
+        let ch = self.peek().unwrap();
 
-        let token = match ch {
-            '*' => Token::Asterisk,
-            ',' => Token::Comma,
-            ';' => Token::Semicolon,
-            '(' => Token::LeftParen,
-            ')' => Token::RightParen,
-            '=' => Token::Equal,
-            '>' => {
-                self.pos += 1;
-                if self.input[self.pos] == '=' {
-                    self.pos += 1;
-                    Token::GreaterThanEqual
-                } else {
-                    Token::GreaterThan
-                }
-            }
-            '<' => {
-                self.pos += 1;
-                if self.input[self.pos] == '=' {
-                    self.pos += 1;
-                    Token::LessThanEqual
-                } else {
-                    Token::LessThan
-                }
-            }
-            'a'..='z' | 'A'..='Z' => return self.read_identifier(),
-            '0'..='9' => return self.read_number(),
-            _ => panic!("Unexpected character: {}", ch),
-        };
+        match ch {
+            // 1. 处理操作符（可能包含双字符 <=, >=, !=）
+            '=' | '!' | '<' | '>' => self.read_operator(),
 
-        self.pos += 1;
-        token
+            // 2. 处理单字符标点
+            '*' => { self.advance(); Token::Asterisk }
+            ',' => { self.advance(); Token::Comma }
+            ';' => { self.advance(); Token::Semicolon }
+            '(' => { self.advance(); Token::LeftParen }
+            ')' => { self.advance(); Token::RightParen }
+
+            // 3. 处理字符串字面量
+            '\'' => self.read_string_literal(),
+
+            // 4. 处理数字
+            '0'..='9' => self.read_number(),
+
+            // 5. 处理标识符与关键字 (支持下划线)
+            'a'..='z' | 'A'..='Z' | '_' => self.read_identifier(),
+
+            _ => panic!("Unexpected character: {} at position {}", ch, self.pos),
+        }
     }
-    // 处理标识符（字段名、表名或关键字）
+
+    // --- 私有处理函数 ---
+
+    /// 工业级操作符处理：最长匹配原则
+    fn read_operator(&mut self) -> Token {
+        let curr = self.advance().unwrap();
+        let next = self.peek();
+
+        match (curr, next) {
+            ('<', Some('=')) => { self.advance(); Token::LessThanEqual }
+            ('>', Some('=')) => { self.advance(); Token::GreaterThanEqual }
+            ('!', Some('=')) => { self.advance(); Token::NotEqual }
+            ('<', _) => Token::LessThan,
+            ('>', _) => Token::GreaterThan,
+            ('=', _) => Token::Equal,
+            ('!', _) => panic!("Unexpected '!' without '=' at position {}", self.pos),
+            _ => unreachable!(),
+        }
+    }
+
     fn read_identifier(&mut self) -> Token {
         let start = self.pos;
-
-        // 修改点：增加对 '_' 的支持
-        while self.pos < self.input.len()
-            && (self.input[self.pos].is_alphanumeric() || self.input[self.pos] == '_')
-        {
-            self.pos += 1;
+        while let Some(c) = self.peek() {
+            if c.is_alphanumeric() || c == '_' {
+                self.advance();
+            } else {
+                break;
+            }
         }
-
         let text: String = self.input[start..self.pos].iter().collect();
-
-        // 匹配关键字
+        
         match text.to_uppercase().as_str() {
             "SELECT" => Token::Select,
-            "FROM" => Token::From,
+            "FROM"   => Token::From,
             "INSERT" => Token::Insert,
+            "INTO"   => Token::Into,
+            "VALUES" => Token::Values,
             "CREATE" => Token::Create,
-            "TABLE" => Token::Table,
-            "WHERE" => Token::Where,
-            _ => Token::Identifier(text),
+            "TABLE"  => Token::Table,
+            "WHERE"  => Token::Where,
+            _        => Token::Identifier(text),
         }
     }
 
     fn read_number(&mut self) -> Token {
         let start = self.pos;
-        while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
+        while let Some(c) = self.peek() {
+            if c.is_ascii_digit() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        let text: String = self.input[start..self.pos].iter().collect();
+        Token::Number(text.parse::<i32>().unwrap_or(0))
+    }
+
+    fn read_string_literal(&mut self) -> Token {
+        self.advance(); // 跳过开头的 '
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if c == '\'' {
+                self.advance(); // 跳过结尾的 '
+                return Token::StringLiteral(s);
+            }
+            s.push(c);
+            self.advance();
+        }
+        panic!("Unterminated string literal at position {}", self.pos);
+    }
+
+    // --- 指针辅助工具 ---
+
+    fn peek(&self) -> Option<char> {
+        self.input.get(self.pos).copied()
+    }
+
+    fn advance(&mut self) -> Option<char> {
+        let res = self.peek();
+        if res.is_some() {
             self.pos += 1;
         }
-        
-        let text: String = self.input[start..self.pos].iter().collect();
-        
-        // 将字符串转换为 i32。如果解析失败（如数字太大），这里简单处理为 0
-        let value = text.parse::<i32>().unwrap_or(0);
-        
-        Token::Number(value)
+        res
+    }
+
+    fn is_eof(&self) -> bool {
+        self.pos >= self.input.len()
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(c) = self.peek() {
+            if c.is_whitespace() {
+                self.advance();
+            } else {
+                break;
+            }
+        }
     }
 }

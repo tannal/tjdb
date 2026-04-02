@@ -7,10 +7,12 @@ pub enum Statement {
 
 #[derive(Debug)]
 pub enum Expression {
+    Column(String),        // 基础列名：age
+    Literal(Value),       // 常量值：21
     BinaryOp {
-        left: String,  // 列名，如 "id"
-        op: String,    // 运算符，如 "="
-        right: Value, // 值，如 "1"
+        left: Box<Expression>,  // 左边可以是 (age + 1)
+        op: String,
+        right: Box<Expression>, // 右边也可以是 (10 * 2)
     },
 }
 
@@ -106,58 +108,64 @@ impl Parser {
         })
     }
 
-    // 极简版表达式解析：只能处理 <Ident> = <Number/String>
-    fn parse_expression(&mut self) -> Result<Expression, String> {
-        // 解析左侧：列名
-        let left = if let Token::Identifier(name) = &self.curr_token {
-            let n = name.clone();
-            self.advance();
-            n
-        } else {
-            return Err("Expected column name in WHERE".to_string());
-        };
-
-        // 解析运算符：现在支持多种比较符号
+    fn get_operator_string(&mut self) -> Result<String, String> {
         let op = match &self.curr_token {
-            Token::Equal => "=",
-            Token::GreaterThan => ">",
-            Token::LessThan => "<",
-            Token::GreaterThanEqual => ">=",
-            Token::LessThanEqual => "<=",
-            _ => {
-                return Err(format!(
-                    "Expected comparison operator, found {:?}",
-                    self.curr_token
-                ));
-            }
-        }
-        .to_string();
-
-        self.advance(); // 跳过运算符
-
-        // 解析右侧：现在直接返回 Value 枚举
-        let right_val = match &self.curr_token {
-            Token::Number(val) => {
-                let v = Value::Int(*val);
-                self.advance();
-                v
-            }
-            Token::Identifier(val) | Token::StringLiteral(val) => {
-                let v = Value::Text(val.clone());
-                self.advance();
-                v
-            }
-            _ => {
-                return Err(format!(
-                    "Expected value in WHERE, found {:?}",
-                    self.curr_token
-                ));
-            }
+            Token::Equal => "=".to_string(),
+            Token::GreaterThan => ">".to_string(),
+            Token::LessThan => "<".to_string(),
+            Token::GreaterThanEqual => ">=".to_string(),
+            Token::LessThanEqual => "<=".to_string(),
+            // Token::NotEqual => "!=".to_string(),
+            // 如果你以后想支持算术运算，可以在这里继续添加
+            // Token::Plus => "+".to_string(),
+            // Token::Minus => "-".to_string(),
+            _ => return Err(format!("Expected operator, found {:?}", self.curr_token)),
         };
-        Ok(Expression::BinaryOp {
-            left,
-            op,
-            right: right_val, // 这里的类型现在是 Value
-        })
+        Ok(op)
+    }
+
+    fn parse_expression(&mut self) -> Result<Expression, String> {
+        let left = self.parse_primary()?;
+
+        // ✅ 修改点：增加 Token::LessThanEqual 和 Token::GreaterThanEqual
+        if matches!(
+            self.curr_token,
+            Token::Equal | 
+            Token::GreaterThan | 
+            Token::LessThan | 
+            Token::GreaterThanEqual | 
+            Token::LessThanEqual
+        ) {
+            let op = self.get_operator_string()?;
+            self.advance(); // 移动到运算符之后的 Token (即右操作数)
+            let right = self.parse_expression()?;
+            Ok(Expression::BinaryOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            })
+        } else {
+            Ok(left)
+        }
+    }
+
+    // 解析基础单元：数字、标识符（列名）
+    fn parse_primary(&mut self) -> Result<Expression, String> {
+        match self.curr_token.clone() {
+            Token::StringLiteral(s) => {
+                self.advance();
+                // 关键点：字符串字面量在 AST 中被视为 Literal(Value::Text)
+                Ok(Expression::Literal(Value::Text(s)))
+            }
+            Token::Number(n) => {
+                self.advance();
+                Ok(Expression::Literal(Value::Int(n)))
+            }
+            Token::Identifier(s) => {
+                self.advance();
+                Ok(Expression::Column(s))
+            }
+            _ => Err(format!("Unexpected token in expression: {:?}", self.curr_token)),
+        }
     }
 }

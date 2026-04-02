@@ -36,7 +36,7 @@ fn main() {
         "SELECT name FROM users WHERE age <= 20",
         
         // D. 字符串匹配 (假设你支持 WHERE name = 'Alice')
-        "SELECT id FROM users WHERE name = Alice",
+        "SELECT id FROM users WHERE name = 'Alice'",
         
         // E. 查无数据的情况
         "SELECT name FROM users WHERE age > 100",
@@ -63,6 +63,7 @@ fn run_query(db: &Database, sql: &str) {
         Ok(ast) => {
             match ast {
                 parser::Statement::Select(select_stmt) => {
+                    println!("Debug AST: {:?}", select_stmt.where_clause);
                     // 只调用一次 build_plan
                     match executor::Executor::build_plan(select_stmt, db) {
                         Ok(plan) => {
