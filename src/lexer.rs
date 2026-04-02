@@ -14,6 +14,8 @@ pub enum Token {
     Values,
     Create,
     Table,
+
+    Where,
     
     // 标点与符号
     Asterisk,  // *
@@ -87,6 +89,7 @@ impl Lexer {
             "INSERT" => Token::Insert,
             "CREATE" => Token::Create,
             "TABLE"  => Token::Table,
+            "WHERE"  => Token::Where,
             _        => Token::Identifier(text),
         }
     }
