@@ -2,6 +2,7 @@
 #[derive(Debug)]
 pub enum Statement {
     Select(SelectStatement),
+    Insert(InsertStatement), // 别忘了在 Statement 枚举中增加这一项
 }
 
 #[derive(Debug)]
@@ -9,8 +10,16 @@ pub enum Expression {
     BinaryOp {
         left: String,  // 列名，如 "id"
         op: String,    // 运算符，如 "="
-        right: String, // 值，如 "1"
+        right: Value, // 值，如 "1"
     },
+}
+
+use crate::storage::Value;
+
+#[derive(Debug, Clone)]
+pub struct InsertStatement {
+    pub table_name: String,
+    pub values: Vec<Value>, // 此时已经是转换后的 Value 枚举
 }
 
 #[derive(Debug)]
@@ -126,16 +135,29 @@ impl Parser {
 
         self.advance(); // 跳过运算符
 
-        // 解析右侧：值 (可以是数字或标识符/字符串)
-        let right = match &self.curr_token {
-            Token::Number(val) | Token::Identifier(val) => {
-                let v = val.clone();
+        // 解析右侧：现在直接返回 Value 枚举
+        let right_val = match &self.curr_token {
+            Token::Number(val) => {
+                let v = Value::Int(*val);
                 self.advance();
                 v
             }
-            _ => return Err("Expected value in WHERE".to_string()),
+            Token::Identifier(val) | Token::StringLiteral(val) => {
+                let v = Value::Text(val.clone());
+                self.advance();
+                v
+            }
+            _ => {
+                return Err(format!(
+                    "Expected value in WHERE, found {:?}",
+                    self.curr_token
+                ));
+            }
         };
-
-        Ok(Expression::BinaryOp { left, op, right })
+        Ok(Expression::BinaryOp {
+            left,
+            op,
+            right: right_val, // 这里的类型现在是 Value
+        })
     }
 }

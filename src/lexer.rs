@@ -30,7 +30,7 @@ pub enum Token {
 
     // 字面量与标识符
     Identifier(String),
-    Number(String),
+    Number(i32),
     StringLiteral(String),
 
     EOF,
@@ -119,13 +119,17 @@ impl Lexer {
         }
     }
 
-    // 处理数字
     fn read_number(&mut self) -> Token {
         let start = self.pos;
         while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
             self.pos += 1;
         }
+        
         let text: String = self.input[start..self.pos].iter().collect();
-        Token::Number(text)
+        
+        // 将字符串转换为 i32。如果解析失败（如数字太大），这里简单处理为 0
+        let value = text.parse::<i32>().unwrap_or(0);
+        
+        Token::Number(value)
     }
 }

@@ -41,15 +41,16 @@ impl<'a> FilterOperator<'a> {
 
                 // 将 SQL 中的字面量（字符串）转换为对应的 Value 类型进行比较
                 // 实际工程中，这个转换应该在 Planner 阶段完成，而不是执行阶段
-                let right_val = Value::from_str_typed(right, left_val);
+                let right_val = right;
 
                 match op.as_str() {
-                    "=" => Ok(left_val == &right_val),
-                    ">" => Ok(left_val > &right_val),
-                    "<" => Ok(left_val < &right_val),
-                    ">=" => Ok(left_val >= &right_val),
-                    "<=" => Ok(left_val <= &right_val),
-                    "!=" => Ok(left_val != &right_val),
+                    // 使用 * 解引用，比较 Value 本身
+                    "="  => Ok(*left_val == *right_val),
+                    ">"  => Ok(*left_val >  *right_val),
+                    "<"  => Ok(*left_val <  *right_val),
+                    ">=" => Ok(*left_val >= *right_val),
+                    "<=" => Ok(*left_val <= *right_val),
+                    "!=" => Ok(*left_val != *right_val),
                     _ => Err(format!("Unsupported operator: {}", op)),
                 }
             }

@@ -3,7 +3,7 @@ use crate::operator::filter::FilterOperator;
 use crate::operator::project::ProjectOperator;
 use crate::operator::scan::ScanOperator;
 // src/executor.rs
-use crate::parser::{Expression, SelectStatement, Statement};
+use crate::parser::{Expression, InsertStatement, SelectStatement, Statement};
 use crate::storage::{Database, Table, Tuple};
 pub struct Executor<'a> {
     db: &'a Database,
