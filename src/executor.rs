@@ -1,9 +1,10 @@
+use crate::operator::aggregate::AggregateOperator;
 use crate::operator::filter::{FilterOperator, PhysicalExpression};
 use crate::operator::project::ProjectOperator;
 use crate::operator::scan::ScanOperator;
 use crate::operator::Operator;
-use crate::parser::{DeleteStatement, Expression, SelectStatement, UpdateStatement};
-use crate::storage::{DataType, Database, Table, Value};
+use crate::parser::{AggregateFunc, DeleteStatement, Expression, SelectItem, SelectStatement, UpdateStatement};
+use crate::storage::{DataType, Database, Table, Tuple, Value};
 
 pub struct Executor;
 
@@ -52,6 +53,84 @@ impl Executor {
 
         let deleted_count = initial_count - table.data.len();
         Ok(deleted_count)
+    }
+
+    fn evaluate_where(
+        &self,
+        where_clause: &Option<Expression>,
+        tuple: &Tuple,
+        table: &Table,
+    ) -> Result<bool, String> {
+        match where_clause {
+            // 1. 如果没有 WHERE 子句，默认全选 (true)
+            None => Ok(true),
+            
+            // 2. 如果有 WHERE 子句，进行绑定和计算
+            Some(expr) => {
+                // 语义校验：确保表达式返回布尔类型
+                let expr_type = self.get_expression_type(expr, table)?;
+                if expr_type != DataType::Bool {
+                    return Err("WHERE clause must evaluate to a boolean".into());
+                }
+
+                // 绑定物理表达式（将列名转换为索引）
+                let phys_expr = Self::bind_expression(expr, table)?;
+
+                // 执行计算
+                match phys_expr.evaluate(tuple)? {
+                    Value::Bool(b) => Ok(b),
+                    _ => Err("Internal Error: WHERE expression did not return a Bool".into()),
+                }
+            }
+        }
+    }
+
+    pub fn execute_aggregate(
+        &self,
+        stmt: SelectStatement,
+        db: &Database,
+    ) -> Result<Tuple, String> {
+        let table = db.tables.get(&stmt.table_name).ok_or("Table not found")?;
+        
+        // 1. 初始化聚合状态
+        let mut count: i32 = 0;
+        let mut sum: i32 = 0;
+        let mut has_sum = false;
+        let mut sum_col_idx = 0;
+    
+        // 预查找 SUM 的列索引
+        for item in &stmt.select_items {
+            if let SelectItem::Aggregate(AggregateFunc::Sum(col)) = item {
+                sum_col_idx = table.columns.iter().position(|c| &c.name == col)
+                    .ok_or(format!("Column {} not found", col))?;
+                has_sum = true;
+            }
+        }
+    
+        // 2. 扫描并累加
+        for tuple in &table.data {
+            // 先过 WHERE 过滤
+            if self.evaluate_where(&stmt.where_clause, tuple, table)? {
+                count += 1;
+                if has_sum {
+                    if let Value::Int(val) = tuple.0[sum_col_idx] {
+                        sum += val;
+                    }
+                }
+            }
+        }
+    
+        // 3. 构造结果行
+        let mut result_row = Vec::new();
+        for item in &stmt.select_items {
+            match item {
+                SelectItem::Aggregate(AggregateFunc::CountWildcard) => result_row.push(Value::Int(count)),
+                SelectItem::Aggregate(AggregateFunc::Sum(_)) => result_row.push(Value::Int(sum)),
+                _ => return Err("Mixing aggregate and non-aggregate columns is not supported yet".into()),
+            }
+        }
+    
+        Ok(Tuple(result_row))
     }
 
     /// 执行 UPDATE 操作：直接修改 Database 中的数据
@@ -155,13 +234,13 @@ impl Executor {
     ) -> Result<Box<dyn Operator + 'a>, String> {
         let table = db
             .tables
-            .get(&stmt.table)
-            .ok_or_else(|| format!("Table not found: {}", stmt.table))?;
-
-        // 1. Scan
+            .get(&stmt.table_name)
+            .ok_or_else(|| format!("Table not found: {}", stmt.table_name))?;
+    
+        // 1. 基础算子：Scan (扫描全表)
         let mut plan: Box<dyn Operator + 'a> = Box::new(ScanOperator::new(&table.data));
-
-        // 2. Filter
+    
+        // 2. 过滤算子：Filter (如果有 WHERE 子句)
         if let Some(cond) = stmt.where_clause {
             let return_type = self.get_expression_type(&cond, table)?;
             if return_type != DataType::Bool {
@@ -170,28 +249,51 @@ impl Executor {
                     return_type
                 ));
             }
-
+    
             let physical_cond = Self::bind_expression(&cond, table)?;
+            // 注意：FilterOperator 会包装 ScanOperator
             plan = Box::new(FilterOperator::new(plan, physical_cond, table));
         }
-
-        // 3. Project
-        let col_indices: Vec<usize> = if stmt.columns.is_empty() {
-            (0..table.columns.len()).collect()
+    
+        // 3. 判断是否包含聚合函数
+        let has_aggregate = stmt.select_items.iter().any(|item| match item {
+            SelectItem::Aggregate(_) => true,
+            _ => false,
+        });
+    
+        if has_aggregate {
+            // --- 聚合逻辑 ---
+            // 校验：目前不支持聚合函数与普通列混合查询（如 SELECT name, COUNT(*)）
+            for item in &stmt.select_items {
+                if let SelectItem::Column(_) | SelectItem::Wildcard = item {
+                    return Err("Mixing aggregate and non-aggregate columns is not supported without GROUP BY".into());
+                }
+            }
+    
+            // 构建聚合算子 (需实现 AggregateOperator)
+            // 它会接收 plan，在执行时“抽干”底层算子的数据进行累加
+            Ok(Box::new(AggregateOperator::new(plan, stmt.select_items, table)?))
         } else {
-            stmt.columns
-                .iter()
-                .map(|name| {
-                    table
-                        .columns
-                        .iter()
-                        .position(|c| &c.name == name)
-                        .ok_or_else(|| format!("Column '{}' not found", name))
-                })
-                .collect::<Result<Vec<_>, String>>()?
-        };
-
-        Ok(Box::new(ProjectOperator::new(plan, col_indices)))
+            // --- 普通投影逻辑 ---
+            let col_indices: Vec<usize> = if stmt.select_items.is_empty() {
+                (0..table.columns.len()).collect()
+            } else {
+                stmt.select_items
+                    .iter()
+                    .map(|item| match item {
+                        SelectItem::Column(name) => table
+                            .columns
+                            .iter()
+                            .position(|c| &c.name == name)
+                            .ok_or_else(|| format!("Column '{}' not found", name)),
+                        SelectItem::Wildcard => Err("Wildcard implementation in Projection needs handling".into()), // 简化处理
+                        _ => unreachable!(),
+                    })
+                    .collect::<Result<Vec<_>, String>>()?
+            };
+    
+            Ok(Box::new(ProjectOperator::new(plan, col_indices)))
+        }
     }
 
     /// 将逻辑表达式转换为基于索引的物理表达式

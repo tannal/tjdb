@@ -2,6 +2,7 @@
 pub mod scan;
 pub mod filter;
 pub mod project;
+pub mod aggregate;
 
 // 建议在这里统一定义 Trait，方便其他地方引用
 use crate::storage::Tuple;

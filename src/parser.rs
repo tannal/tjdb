@@ -25,7 +25,6 @@ pub enum Expression {
 #[derive(Debug)]
 pub struct UpdateStatement {
     pub table_name: String,
-    // 改为 Vec，存储多个 (列名, 新值表达式)
     pub assignments: Vec<(String, Expression)>,
     pub where_clause: Option<Expression>,
 }
@@ -42,10 +41,25 @@ pub struct InsertStatement {
     pub values: Vec<Value>,
 }
 
+#[derive(Debug, Clone)]
+pub enum SelectItem {
+    Column(String),           // 普通列: name
+    Wildcard,                 // 全选: *
+    Aggregate(AggregateFunc), // 聚合函数: COUNT(*), SUM(age)
+}
+
+#[derive(Debug, Clone)]
+pub enum AggregateFunc {
+    CountWildcard, // COUNT(*)
+    Sum(String),   // SUM(column_name)
+    Min(String),   // MIN(column_name)
+    Max(String),   // MAX(column_name)
+}
+
 #[derive(Debug)]
 pub struct SelectStatement {
-    pub columns: Vec<String>,
-    pub table: String,
+    pub select_items: Vec<SelectItem>,
+    pub table_name: String,
     pub where_clause: Option<Expression>,
 }
 
@@ -62,12 +76,10 @@ impl Parser {
         Self { lexer, curr_token }
     }
 
-    // 辅助函数：消费当前 Token 并获取下一个
     fn advance(&mut self) {
         self.curr_token = self.lexer.next_token();
     }
 
-    // 辅助函数：校验并消费
     fn consume(&mut self, expected: Token) -> Result<(), String> {
         if self.curr_token == expected {
             self.advance();
@@ -80,7 +92,6 @@ impl Parser {
         }
     }
 
-    // 解析标识符（表名、列名）
     fn parse_identifier(&mut self) -> Result<String, String> {
         if let Token::Identifier(s) = &self.curr_token {
             let name = s.clone();
@@ -91,7 +102,51 @@ impl Parser {
         }
     }
 
-    // 核心解析入口
+    fn parse_select_item(&mut self) -> Result<SelectItem, String> {
+        match &self.curr_token {
+            Token::Asterisk => {
+                self.advance();
+                Ok(SelectItem::Wildcard)
+            }
+            Token::Identifier(name) => {
+                let name = name.clone();
+                self.advance();
+
+                // 检查是否是函数调用: FUNC(...)
+                if self.curr_token == Token::LeftParen {
+                    self.advance(); // 消耗左括号 '('
+                    
+                    let item = match name.to_uppercase().as_str() {
+                        "COUNT" => {
+                            self.consume(Token::Asterisk)?; // 目前仅支持 COUNT(*)
+                            SelectItem::Aggregate(AggregateFunc::CountWildcard)
+                        }
+                        "SUM" => {
+                            let col = self.parse_identifier()?;
+                            SelectItem::Aggregate(AggregateFunc::Sum(col))
+                        }
+                        "MIN" => {
+                            // 注意：此处不再重复 consume(Token::LeftParen)，因为上面已经 advance 过了
+                            let col = self.parse_identifier()?;
+                            SelectItem::Aggregate(AggregateFunc::Min(col))
+                        }
+                        "MAX" => {
+                            let col = self.parse_identifier()?;
+                            SelectItem::Aggregate(AggregateFunc::Max(col))
+                        }
+                        _ => return Err(format!("Unknown function: {}", name)),
+                    };
+                    
+                    self.consume(Token::RightParen)?; // 消耗右括号 ')'
+                    Ok(item)
+                } else {
+                    Ok(SelectItem::Column(name))
+                }
+            }
+            _ => Err("Expected column name or function".into()),
+        }
+    }
+
     pub fn parse_statement(&mut self) -> Result<Statement, String> {
         match self.curr_token {
             Token::Select => Ok(Statement::Select(self.parse_select()?)),
@@ -104,8 +159,7 @@ impl Parser {
 
     fn parse_delete(&mut self) -> Result<DeleteStatement, String> {
         self.consume(Token::Delete)?;
-        self.consume(Token::From)?; // 解析 FROM
-        
+        self.consume(Token::From)?;
         let table_name = self.parse_identifier()?;
 
         let mut where_clause = None;
@@ -114,31 +168,21 @@ impl Parser {
             where_clause = Some(self.parse_expression()?);
         }
 
-        Ok(DeleteStatement {
-            table_name,
-            where_clause,
-        })
+        Ok(DeleteStatement { table_name, where_clause })
     }
 
-    /// 解析 UPDATE users SET age = age + 1 WHERE id = 1
     fn parse_update(&mut self) -> Result<UpdateStatement, String> {
         self.consume(Token::Update)?;
-
-        // 解析表名
         let table_name = self.parse_identifier()?;
-
         self.consume(Token::Set)?;
 
-        // 2. 解析赋值列表 (column = expr, column2 = expr2...)
         let mut assignments = Vec::new();
         loop {
             let column_name = self.parse_identifier()?;
             self.consume(Token::Equal)?;
             let new_value = self.parse_expression()?;
-
             assignments.push((column_name, new_value));
 
-            // 如果看到逗号，继续解析下一对；否则跳出循环
             if self.curr_token == Token::Comma {
                 self.advance();
             } else {
@@ -146,38 +190,26 @@ impl Parser {
             }
         }
 
-        // 解析可选的 WHERE
         let mut where_clause = None;
         if self.curr_token == Token::Where {
-            self.advance(); // 消耗 WHERE
+            self.advance();
             where_clause = Some(self.parse_expression()?);
         }
 
-        Ok(UpdateStatement {
-            table_name,
-            assignments,
-            where_clause,
-        })
+        Ok(UpdateStatement { table_name, assignments, where_clause })
     }
 
-    // 解析 SELECT 语句: SELECT col1, col2 FROM table
     fn parse_select(&mut self) -> Result<SelectStatement, String> {
         self.consume(Token::Select)?;
 
-        let mut columns = Vec::new();
+        let mut columns: Vec<SelectItem> = Vec::new();
+        loop {
+            columns.push(self.parse_select_item()?);
 
-        // 检查是否是 SELECT *
-        if self.curr_token == Token::Asterisk {
-            self.advance(); // 消耗 *
-        // columns 保持为空列表表示全选
-        } else {
-            loop {
-                columns.push(self.parse_identifier()?);
-                if self.curr_token == Token::Comma {
-                    self.advance();
-                } else {
-                    break;
-                }
+            if self.curr_token == Token::Comma {
+                self.advance();
+            } else {
+                break;
             }
         }
 
@@ -186,13 +218,13 @@ impl Parser {
 
         let mut where_clause = None;
         if self.curr_token == Token::Where {
-            self.advance(); // 消耗 WHERE
+            self.advance();
             where_clause = Some(self.parse_expression()?);
         }
 
         Ok(SelectStatement {
-            columns,
-            table,
+            select_items: columns,
+            table_name: table,
             where_clause,
         })
     }
@@ -200,9 +232,7 @@ impl Parser {
     fn parse_insert(&mut self) -> Result<InsertStatement, String> {
         self.consume(Token::Insert)?;
         self.consume(Token::Into)?;
-
         let table_name = self.parse_identifier()?;
-
         self.consume(Token::Values)?;
         self.consume(Token::LeftParen)?;
 
@@ -211,12 +241,7 @@ impl Parser {
             match &self.curr_token {
                 Token::Number(n) => values.push(Value::Int(*n)),
                 Token::StringLiteral(s) => values.push(Value::Text(s.clone())),
-                _ => {
-                    return Err(format!(
-                        "Expected literal value, found {:?}",
-                        self.curr_token
-                    ));
-                }
+                _ => return Err(format!("Expected literal, found {:?}", self.curr_token)),
             }
             self.advance();
             if self.curr_token == Token::Comma {
@@ -227,11 +252,8 @@ impl Parser {
         }
 
         self.consume(Token::RightParen)?;
-
         Ok(InsertStatement { table_name, values })
     }
-
-    // --- 表达式解析 (Pratt Parsing) ---
 
     pub fn parse_expression(&mut self) -> Result<Expression, String> {
         self.parse_sub_expression(0)
@@ -252,9 +274,7 @@ impl Parser {
                 break;
             }
 
-            self.advance(); // 消费运算符
-
-            // 左结合使用 precedence + 1
+            self.advance();
             let right = self.parse_sub_expression(precedence + 1)?;
 
             left = Expression::BinaryOp {
@@ -287,14 +307,9 @@ impl Parser {
                 self.advance();
                 Ok(Expression::Column(s))
             }
-            _ => Err(format!(
-                "Unexpected token in primary: {:?}",
-                self.curr_token
-            )),
+            _ => Err(format!("Unexpected token in primary: {:?}", self.curr_token)),
         }
     }
-
-    // --- 运算符辅助函数 ---
 
     fn get_precedence(&self, op: &str) -> i32 {
         match op {
@@ -308,16 +323,9 @@ impl Parser {
     fn is_binary_operator(token: &Token) -> bool {
         matches!(
             token,
-            Token::Equal
-                | Token::NotEqual
-                | Token::LessThan
-                | Token::LessThanEqual
-                | Token::GreaterThan
-                | Token::GreaterThanEqual
-                | Token::Plus
-                | Token::Minus
-                | Token::Asterisk
-                | Token::Divide
+            Token::Equal | Token::NotEqual | Token::LessThan | Token::LessThanEqual |
+            Token::GreaterThan | Token::GreaterThanEqual | Token::Plus | Token::Minus |
+            Token::Asterisk | Token::Divide
         )
     }
 
