@@ -9,6 +9,13 @@ pub enum Value {
     Null,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum DataType {
+    Int,
+    Text,
+    Bool,
+}
+
 impl Value {
     pub fn from_str_typed(lit: &str, target: &Value) -> Self {
         match target {

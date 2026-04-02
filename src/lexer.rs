@@ -18,6 +18,10 @@ pub enum Token {
     LessThan,         // <
     LessThanEqual,    // <=
 
+    Plus,
+    Divide,
+    Minus,
+
     // 字面量与标识符
     Identifier(String),
     Number(i32),
@@ -59,6 +63,10 @@ impl Lexer {
             ';' => { self.advance(); Token::Semicolon }
             '(' => { self.advance(); Token::LeftParen }
             ')' => { self.advance(); Token::RightParen }
+
+            '+' => {self.advance(); Token::Plus}
+            '-' => {self.advance(); Token::Minus}
+            '/' => {self.advance(); Token::Divide}
 
             // 3. 处理字符串字面量
             '\'' => self.read_string_literal(),

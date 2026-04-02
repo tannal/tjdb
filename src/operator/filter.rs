@@ -41,29 +41,25 @@ impl<'a> FilterOperator<'a> {
     fn bind_expression(expr: &Expression, table: &Table) -> PhysicalExpression {
         match expr {
             Expression::Literal(v) => PhysicalExpression::Literal(v.clone()),
-            
+
             Expression::Column(name) => {
-                let idx = table.columns.iter()
+                let idx = table
+                    .columns
+                    .iter()
                     .position(|c| c == name)
                     .expect(&format!("Column {} not found", name)); // 这里抛出错误
                 PhysicalExpression::BoundColumn(idx)
             }
 
-            Expression::BinaryOp { left, op, right } => {
-                PhysicalExpression::BinaryOp {
-                    left: Box::new(Self::bind_expression(left, table)),
-                    op: op.clone(),
-                    right: Box::new(Self::bind_expression(right, table)),
-                }
-            }
+            Expression::BinaryOp { left, op, right } => PhysicalExpression::BinaryOp {
+                left: Box::new(Self::bind_expression(left, table)),
+                op: op.clone(),
+                right: Box::new(Self::bind_expression(right, table)),
+            },
         }
     }
 
-    pub fn evaluate(
-        &self,
-        expr: &PhysicalExpression,
-        tuple: &Tuple,
-    ) -> Result<Value, String> {
+    pub fn evaluate(&self, expr: &PhysicalExpression, tuple: &Tuple) -> Result<Value, String> {
         match expr {
             // 1. 叶子节点：常量值
             PhysicalExpression::Literal(v) => Ok(v.clone()),
@@ -82,21 +78,43 @@ impl<'a> FilterOperator<'a> {
 
                 // 执行具体的比较逻辑
                 match op.as_str() {
-                    "="  => Ok(Value::Bool(left_val == right_val)),
-                    ">"  => Ok(Value::Bool(left_val > right_val)),
-                    "<"  => Ok(Value::Bool(left_val < right_val)),
+                    "=" => Ok(Value::Bool(left_val == right_val)),
+                    ">" => Ok(Value::Bool(left_val > right_val)),
+                    "<" => Ok(Value::Bool(left_val < right_val)),
                     ">=" => Ok(Value::Bool(left_val >= right_val)),
                     "<=" => Ok(Value::Bool(left_val <= right_val)),
                     "!=" => Ok(Value::Bool(left_val != right_val)),
-                    
-                    // 预留算术运算（如果你以后解析 1 + 1）
+
+                    // 算术运算（如果你以后解析 1 + 1）
                     "+" => {
                         if let (Value::Int(a), Value::Int(b)) = (left_val, right_val) {
                             Ok(Value::Int(a + b))
                         } else {
-                            Err("Addition only supported for Integers".into())
+                            Err("Type mismatch: '+' only supports Integers".into())
                         }
                     }
+                    "*" => {
+                        if let (Value::Int(a), Value::Int(b)) = (left_val, right_val) {
+                            Ok(Value::Int(a * b))
+                        } else {
+                            Err("Type mismatch: '*' only supports Integers".into())
+                        }
+                    }
+                    "-" => {
+                        if let (Value::Int(a), Value::Int(b)) = (left_val, right_val) {
+                            Ok(Value::Int(a - b))
+                        } else {
+                            Err("Type mismatch: '*' only supports Integers".into())
+                        }
+                    }
+                    "/" => {
+                        if let (Value::Int(a), Value::Int(b)) = (left_val, right_val) {
+                            Ok(Value::Int(a / b))
+                        } else {
+                            Err("Type mismatch: '*' only supports Integers".into())
+                        }
+                    }
+
                     _ => Err(format!("Unknown operator in execution: {}", op)),
                 }
             }
@@ -126,7 +144,7 @@ impl<'a> Iterator for FilterOperator<'a> {
                         Ok(other_val) => {
                             // 语义错误：例如 WHERE age (结果是 Int 而不是 Bool)
                             return Some(Err(format!(
-                                "Filter condition must evaluate to a boolean, found {:?}", 
+                                "Filter condition must evaluate to a boolean, found {:?}",
                                 other_val
                             )));
                         }
