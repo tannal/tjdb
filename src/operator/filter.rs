@@ -22,40 +22,49 @@ pub enum PhysicalExpression {
     },
 }
 impl<'a> FilterOperator<'a> {
-    pub fn new(
+pub fn new(
         source: Box<dyn Operator + 'a>,
-        condition: Expression,
+        condition: PhysicalExpression, // 👈 传入已经绑定好的物理表达式
         table_schema: &'a Table,
     ) -> Self {
-        // 在这里进行递归绑定
-        let physical_cond = Self::bind_expression(&condition, table_schema);
-
         Self {
             source,
-            condition: physical_cond,
+            condition,
             table_schema,
         }
     }
 
-    // 递归绑定函数：将“列名”映射为“索引”
-    fn bind_expression(expr: &Expression, table: &Table) -> PhysicalExpression {
+    /// 递归绑定函数：将带有“列名”的逻辑表达式 (Expression)
+    /// 转换为带有“索引”的物理表达式 (PhysicalExpression)
+    fn bind_expression(expr: &Expression, table: &Table) -> Result<PhysicalExpression, String> {
         match expr {
-            Expression::Literal(v) => PhysicalExpression::Literal(v.clone()),
+            // 1. 处理字面量：直接透传
+            Expression::Literal(v) => Ok(PhysicalExpression::Literal(v.clone())),
 
+            // 2. 处理列名：查找索引（Schema 绑定的核心）
             Expression::Column(name) => {
                 let idx = table
                     .columns
                     .iter()
-                    .position(|c| c == name)
-                    .expect(&format!("Column {} not found", name)); // 这里抛出错误
-                PhysicalExpression::BoundColumn(idx)
+                    .position(|c| &c.name == name) // 比较 ColumnDefinition.name 和 String
+                    .ok_or_else(|| {
+                        format!("Column '{}' not found in table '{}'", name, table.name)
+                    })?;
+
+                Ok(PhysicalExpression::BoundColumn(idx))
             }
 
-            Expression::BinaryOp { left, op, right } => PhysicalExpression::BinaryOp {
-                left: Box::new(Self::bind_expression(left, table)),
-                op: op.clone(),
-                right: Box::new(Self::bind_expression(right, table)),
-            },
+            // 3. 处理二元运算：递归绑定左右子树
+            Expression::BinaryOp { left, op, right } => {
+                let bound_left = Self::bind_expression(left, table)?;
+                let bound_right = Self::bind_expression(right, table)?;
+
+                Ok(PhysicalExpression::BinaryOp {
+                    left: Box::new(bound_left),
+                    op: op.clone(),
+                    right: Box::new(bound_right),
+                })
+            }
         }
     }
 

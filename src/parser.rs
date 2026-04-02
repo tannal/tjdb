@@ -53,6 +53,7 @@ impl Parser {
     pub fn parse_statement(&mut self) -> Result<Statement, String> {
         match self.curr_token {
             Token::Select => Ok(Statement::Select(self.parse_select()?)),
+            Token::Insert => Ok(Statement::Insert(self.parse_insert()?)),
             _ => Err(format!("Unsupported statement: {:?}", self.curr_token)),
         }
     }
@@ -140,6 +141,42 @@ impl Parser {
             _ => return Err(format!("Unknown operator: {:?}", self.curr_token)),
         };
         Ok(op.to_string())
+    }
+
+    fn parse_insert(&mut self) -> Result<InsertStatement, String> {
+        self.advance(); // 跳过 INSERT
+        if self.curr_token != Token::Into { return Err("Expected INTO".into()); }
+        self.advance();
+    
+        let table_name = if let Token::Identifier(name) = &self.curr_token {
+            name.clone()
+        } else {
+            return Err("Expected table name".into());
+        };
+        self.advance();
+    
+        if self.curr_token != Token::Values { return Err("Expected VALUES".into()); }
+        self.advance();
+    
+        if self.curr_token != Token::LeftParen { return Err("Expected '('".into()); }
+        self.advance();
+    
+        let mut values = Vec::new();
+        loop {
+            match &self.curr_token {
+                Token::Number(n) => values.push(Value::Int(*n)),
+                Token::StringLiteral(s) => values.push(Value::Text(s.clone())),
+                _ => return Err("Expected literal value".into()),
+            }
+            self.advance();
+            if self.curr_token == Token::Comma { self.advance(); } 
+            else { break; }
+        }
+    
+        if self.curr_token != Token::RightParen { return Err("Expected ')'".into()); }
+        self.advance();
+    
+        Ok(InsertStatement { table_name, values })
     }
     
     pub fn parse_expression(&mut self) -> Result<Expression, String> {
